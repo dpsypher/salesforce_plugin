@@ -1,4 +1,12 @@
+import logging
+import json
+
 from airflow.models import BaseOperator
+
+from airflow.hooks.S3_hook import S3Hook
+from airflow.hooks.postgres_hook import PostgresHook
+from airflow.providers.salesforce.hooks.salesforce import SalesforceHook
+
 
 class SalesforceSchemaToRedshiftOperator(BaseOperator):
     """
@@ -40,7 +48,8 @@ class SalesforceSchemaToRedshiftOperator(BaseOperator):
 
     dt_conv = {
         'boolean': lambda x: 'boolean',
-        'date': lambda x: 'date',
+        #'date': lambda x: 'date',
+        'date': lambda x: 'TIMESTAMP',
         'dateTime': lambda x: 'TIMESTAMP',
         'double': lambda x: 'float8',
         'email': lambda x: 'varchar(80)',
@@ -162,11 +171,16 @@ class SalesforceSchemaToRedshiftOperator(BaseOperator):
         q = """
             SELECT column_name
             FROM information_schema.columns c
-            WHERE table_name = '{rs_table}'
-            and table_schema = '{rs_schema}'
-            and table_catalog = '{rs_database}'
+            WHERE lower(table_name) = lower('{rs_table}')
+            and lower(table_schema) = lower('{rs_schema}')
+            and lower(table_catalog) = lower('{rs_database}')
             ORDER BY ordinal_position ASC
         """
+        logging.info(q.format(
+            rs_table=rs_table,
+            rs_schema=rs_schema,
+            rs_database=rs_info.schema
+        ))
 
         rs_conn.execute(q.format(
             rs_table=rs_table,
@@ -175,20 +189,27 @@ class SalesforceSchemaToRedshiftOperator(BaseOperator):
         ))
 
         rs_cols = rs_conn.fetchall()
+        logging.info('rs_cols %s', rs_cols)
         rs_cols = [col[0] for col in rs_cols]
         tbl_missing = False if rs_cols else True
 
         if tbl_missing:
+            logging.info('table is missing. create table ddl')
             ddl = self.create_tbl_ddl(rs_table, rs_schema, sf_cols)
 
         else:
+            logging.info('table is not missing. checking for table ddl chanles')
             # All columns that exist in sf_cols but not in rs_cols
             # missing_cols = {x['name'] for x in sf_cols} - {x[0] for x in rs_cols}
             missing_cols = [x for x in sf_cols if x['rs_name'] not in rs_cols]
+            
+            if missing_cols:
+                logging.info('missing cols: %s', missing_cols)
             ddl = self.alter_tbl_ddl(rs_schema, rs_table, missing_cols) if missing_cols else None
 
         rs_conn.close()
 
+        logging.info('ddl: %s', ddl)
         return ddl
 
     def fetch_rs_columns(self, rs_conn_id, rs_table, rs_schema):
@@ -201,18 +222,27 @@ class SalesforceSchemaToRedshiftOperator(BaseOperator):
         rs_conn = PostgresHook(rs_conn_id).get_cursor()
 
         q = """
-            SELECT column_name, ordinal_position
+            SELECT column_name, ordinal_position, udt_name, character_maximum_length, numeric_precision, numeric_precision_radix 
             FROM information_schema.columns c
-            WHERE table_name = '{rs_table}'
-            and table_schema = '{rs_schema}'
-            and table_catalog = '{rs_database}'
+            WHERE lower(table_name) = lower('{rs_table}')
+            and lower(table_schema) = lower('{rs_schema}')
+            and lower(table_catalog) = lower('{rs_database}')
             ORDER BY ordinal_position ASC
         """.format(rs_table=rs_table, rs_schema=rs_schema, rs_database=rs_info.schema)
 
         rs_conn.execute(q)
         recs = rs_conn.fetchall()
         rs_conn.close()
-        return [rec[0] for rec in recs]
+        return [(rec[0], rec[2], rec[3], rec[4], rec[5]) for rec in recs]
+
+    def create_ddl_schema(self, rs_cols_details):
+        """
+        (e.g. {"name": "_id", "type": "int4"})
+        """
+        ddl_list = []
+        for column_name, udt_name, character_maximum_length, numeric_precision, numeric_precision_radix in  rs_cols_details:
+            ddl_list.append({"name": column_name, "type": udt_name})
+        return json.dumps(ddl_list)
 
     def create_paths(self, paths):
         """
@@ -242,12 +272,17 @@ class SalesforceSchemaToRedshiftOperator(BaseOperator):
         tmplts = ["\t{},\n" for i in range(l)]
         # JSON Paths that will be passted into template strings
         paths = [tmplts[i].format(create_path(paths[i])) for i in range(l)]
-        paths[-1] = paths[-1].replace(',', '') # remove first , in path
-        paths_str = ''.join(paths) # finally merge into single str
+        logging.info("paths: %s", paths)
+        
+        if paths:
+            paths[-1] = paths[-1].replace(',', '') # remove first , in path
+            paths_str = ''.join(paths) # finally merge into single str
 
-        return "{\n" + base.format(paths_str) + "\n}"
+            return "{\n" + base.format(paths_str) + "\n}"
+        else:
+            return ''
 
-    def generate_path_file(self, rs_cols, sf_cols):
+    def generate_path_file(self, rs_cols, sf_cols, rs_cols_details):
         """
         Takes a list of __ordered__ redshift columns that exist in the dst
         and a list of salesforce columns that exist in the source. Using the
@@ -266,7 +301,12 @@ class SalesforceSchemaToRedshiftOperator(BaseOperator):
         sf_cols = {sf_col['rs_name']: sf_col['path'] for sf_col in sf_cols}
         ordered_paths = [sf_cols.get(col_key, None) for col_key in rs_cols if sf_cols.get(col_key) is not None]
 
-        return self.create_paths(ordered_paths)
+        logging.info("rs_cols: %s", rs_cols)
+        logging.info("rs_cols_details: %s", rs_cols_details)
+        logging.info("sf_cols: %s", sf_cols)
+        logging.info("ordered_paths: %s", ordered_paths)
+
+        return self.create_ddl_schema(rs_cols_details)
 
     def build_copy_cmd_template(self, schema, tbl, columns, path_key, path_bucket):
         """
@@ -278,7 +318,7 @@ class SalesforceSchemaToRedshiftOperator(BaseOperator):
         FROM 's3://{{bucket}}/{{key}}'
         CREDENTIALS '{{creds}}'
         JSON 's3://{path_bucket}/{path}'
-        REGION as 'us-east-1'
+        REGION as 'ap-southeast-2'
         TIMEFORMAT 'epochmillisecs'
         TRUNCATECOLUMNS
         COMPUPDATE OFF
@@ -310,10 +350,10 @@ class SalesforceSchemaToRedshiftOperator(BaseOperator):
                 rs.run(ddl)
 
         # Get Columns From Redshift
-        rs_cols = self.fetch_rs_columns(self.rs_conn_id, self.rs_table, self.rs_schema)
-        
+        rs_cols_details = self.fetch_rs_columns(self.rs_conn_id, self.rs_table, self.rs_schema)
+        rs_cols = [cols[0] for cols in rs_cols_details]  # just the first column
         # Generate JSONPath String w/ same ordering as RS Table Columns
-        jsonPath = self.generate_path_file(rs_cols, sf_cols)
+        jsonPath = self.create_ddl_schema(rs_cols_details)
 
         # Push JSONPath to S3
         s3 = S3Hook(self.s3_conn_id)
