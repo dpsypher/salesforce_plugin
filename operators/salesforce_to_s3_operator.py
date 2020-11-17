@@ -185,7 +185,8 @@ class SalesforceToS3Operator(BaseOperator):
             # Get object from Salesforce
             # If fields were not defined, all fields are pulled.
             if not self.fields:
-                self.fields = hook.get_available_fields(self.object)
+                #logging.info('get available fields: %s', self.object)
+                self.fields = hook.get_available_fields(self.object['name'])
 
             logging.info(
                 "Making request for "
@@ -198,7 +199,7 @@ class SalesforceToS3Operator(BaseOperator):
                                            relationship_object=self.relationship_object
                                            )
             else:
-                query = hook.get_object_from_salesforce(self.object,
+                query = hook.get_object_from_salesforce(self.object['name'],
                                                         self.fields)
 
             # output the records from the query to a file
@@ -223,7 +224,7 @@ class SalesforceToS3Operator(BaseOperator):
                 replace=True
             )
 
-            dest_s3.connection.close()
+            #dest_s3.connection.close()
 
             tmp.close()
 
