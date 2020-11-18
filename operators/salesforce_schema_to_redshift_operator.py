@@ -241,7 +241,15 @@ class SalesforceSchemaToRedshiftOperator(BaseOperator):
         """
         ddl_list = []
         for column_name, udt_name, character_maximum_length, numeric_precision, numeric_precision_radix in  rs_cols_details:
-            ddl_list.append({"name": column_name, "type": udt_name})
+            ddl_list.append(
+                {
+                    "name": column_name, 
+                    "type": udt_name, 
+                    "length": character_maximum_length, 
+                    "precision": numeric_precision, 
+                    "precision_radix": numeric_precision_radix
+                }
+            )
         return json.dumps(ddl_list)
 
     def create_paths(self, paths):
