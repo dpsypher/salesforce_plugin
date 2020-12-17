@@ -206,11 +206,15 @@ class SalesforceToS3Operator(BaseOperator):
             # the list of records is stored under the "records" key
             logging.info("Writing query results to: {0}".format(tmp.name))
 
-            hook.write_object_to_file(query['records'],
-                                      filename=tmp.name,
-                                      fmt=self.fmt,
-                                      coerce_to_timestamp=self.coerce_to_timestamp,
-                                      record_time_added=self.record_time_added)
+            try:
+                hook.write_object_to_file(query['records'],
+                                        filename=tmp.name,
+                                        fmt=self.fmt,
+                                        coerce_to_timestamp=self.coerce_to_timestamp,
+                                        record_time_added=self.record_time_added)
+            except KeyError as e:
+                logging.error("KeyError - Suspect empty object: %s", e)
+                raise
 
             # Flush the temp file and upload temp file to S3
             tmp.flush()

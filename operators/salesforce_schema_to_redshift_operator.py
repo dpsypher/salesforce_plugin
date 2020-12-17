@@ -1,3 +1,4 @@
+
 import logging
 import json
 
@@ -91,6 +92,12 @@ class SalesforceSchemaToRedshiftOperator(BaseOperator):
         Salesforce instance. Compound columns are filtered out.
         """
         sf_conn = SalesforceHook(sf_conn_id).get_conn()
+
+        sf_return = sf_conn.query_all(
+            "SELECT MasterLabel, PluralLabel, KeyPrefix, DeveloperName, QualifiedApiName, NamespacePrefix, IsCustomSetting FROM EntityDefinition WHERE IsCustomSetting = false Order by MasterLabel"
+            # ,include_deleted=include_deleted, **query_params
+        )
+        logging.info("All Objects:\n%s", sf_return)
 
         # Dynamically Fetch the simple_salesforce query method
         # ie. sf_conn.Lead.describe() | sf_conn.Contact.describe()
