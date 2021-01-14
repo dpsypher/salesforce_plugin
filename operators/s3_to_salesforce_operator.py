@@ -1,9 +1,11 @@
 import csv
-from tempfile import NamedTemporaryFile
-import os
+from datetime import datetime
 import json
+import pytz
+from tempfile import NamedTemporaryFile
 
 from airflow.utils.decorators import apply_defaults
+from airflow.settings import TIMEZONE
 from airflow.models import BaseOperator
 from airflow.hooks.S3_hook import S3Hook
 import boto3
@@ -73,6 +75,7 @@ class S3OperatorToSalesforceBulkQuery(BaseOperator):
         )
         session = boto3.Session(**session_arg)
 
+        items = []
         for _file in manifest['entries']:
             data = []
             with smart_open(
@@ -86,4 +89,16 @@ class S3OperatorToSalesforceBulkQuery(BaseOperator):
 
             if data:
                 sf_conn = SalesforceHook(self.sf_conn_id).get_conn()
-                sf_conn.bulk.__getattr__(self.object).upsert(data, self.object_key, batch_size=10000, use_serial=True)
+                response = sf_conn.bulk.__getattr__(self.object).upsert(data, self.object_key, batch_size=10000, use_serial=True)
+
+                if response:
+                    self.log.info('Response: %s', response)                  
+                    self.log.info('data: %s', data) 
+
+                    for num, row in enumerate(data):
+                        record = response[num]
+                        row.update({'filename' : _file['url'], 'created_time' : datetime.now(pytz.timezone(TIMEZONE.name)).strftime("%Y-%m-%d %H:%M:%S")})
+                        row.update(record)
+                        items.append(row)
+
+        return items
