@@ -1,7 +1,6 @@
 import csv
 from datetime import datetime
 import json
-import os
 import pytz
 from tempfile import NamedTemporaryFile
 
