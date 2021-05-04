@@ -61,6 +61,7 @@ class SalesforceSchemaToRedshiftOperator(BaseOperator):
         'phone': lambda x: 'varchar(40)',
         'string': lambda x: 'varchar({})'.format(x if x <= 65535 else 'MAX'),
         'textarea': lambda x: 'varchar({})'.format(x if x <= 65535 else 'MAX'),
+        'base64Binary': lambda x: 'varchar(100)',
         'url': lambda x: 'varchar(256)'
     }
 

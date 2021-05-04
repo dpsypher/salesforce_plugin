@@ -61,6 +61,7 @@ class S3OperatorToSalesforceBulkQuery(BaseOperator):
         self.object_key = object_key  # for example 'Id'
 
     def execute(self, context):
+        self.log.info("S3 Bucket: %s", self.s3_bucket)
         self.log.info("S3 Key: %s", self.s3_key)
 
         s3 = S3Hook(self.s3_conn_id)
@@ -89,6 +90,7 @@ class S3OperatorToSalesforceBulkQuery(BaseOperator):
 
             if data:
                 sf_conn = SalesforceHook(self.sf_conn_id).get_conn()
+                self.log.info(data)
                 response = sf_conn.bulk.__getattr__(self.object).upsert(data, self.object_key, batch_size=10000, use_serial=True)
 
                 if response:
